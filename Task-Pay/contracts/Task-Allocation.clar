@@ -23,7 +23,8 @@
         total-budget: uint,
         current-status: (string-ascii 20),
         created-at-height: uint,
-        members: (list 20 principal)
+        members: (list 20 principal),
+        project-id-copy: uint
     }
 )
 
@@ -37,7 +38,9 @@
         deadline-height: uint,
         reward-amount: uint,
         current-status: (string-ascii 20),
-        created-at-height: uint
+        created-at-height: uint,
+        project-id-copy: uint,
+        task-id-copy: uint
     }
 )
 
@@ -60,7 +63,8 @@
         tasks-completed: uint,
         total-earned: uint,
         average-rating: uint,
-        total-ratings: uint
+        total-ratings: uint,
+        member-address-copy: principal
     }
 )
 
@@ -103,7 +107,7 @@
                     (ok (get next-id counter-info))
                 )
             )
-        (err ERR-PROJECT-NOT-FOUND)
+        ERR-PROJECT-NOT-FOUND
     )
 )
 
@@ -130,7 +134,8 @@
                         total-budget: budget,
                         current-status: "active",
                         created-at-height: block-height,
-                        members: (list)
+                        members: (list),
+                        project-id-copy: new-project-id
                     }
                 )
                 (ok new-project-id)
@@ -148,19 +153,22 @@
             (caller tx-sender)
         )
         (match (map-get? projects { project-id: project-id })
-            project-info
-                (if (is-eq (get owner project-info) caller)
-                    (if (is-some (index-of (get members project-info) member-address))
-                        ERR-INVALID-INPUT
-                        (begin
-                            (map-set projects
-                                { project-id: project-id }
-                                (merge project-info { members: (unwrap! (as-max-len? (append (get members project-info) member-address) u20) ERR-UNAUTHORIZED-ACCESS) })
-                            )
-                            (ok true)
-                        )
+            project-data
+                (let
+                    (
+                        (validated-project-id (get project-id-copy project-data))
                     )
-                    ERR-UNAUTHORIZED-ACCESS
+                    (begin
+                        (asserts! (is-eq (get owner project-data) caller) ERR-UNAUTHORIZED-ACCESS)
+                        (asserts! (is-none (index-of (get members project-data) member-address)) ERR-INVALID-INPUT)
+                        (map-set projects
+                            { project-id: validated-project-id }
+                            (merge project-data { 
+                                members: (unwrap! (as-max-len? (append (get members project-data) member-address) u20) ERR-INVALID-INPUT) 
+                            })
+                        )
+                        (ok true)
+                    )
                 )
             ERR-PROJECT-NOT-FOUND
         )
@@ -183,23 +191,27 @@
             (caller tx-sender)
         )
         (match (map-get? projects { project-id: project-id })
-            project-info
-                (if (is-eq (get owner project-info) caller)
-                    (if (and 
-                            (> (len title) u0)
-                            (> (len description) u0)
-                            (> deadline block-height)
-                            (> reward u0)
-                            (or
-                                (is-eq assignee (get owner project-info))
-                                (is-some (index-of (get members project-info) assignee))
-                            )
-                        )
-                        (match (get-next-task-id project-id)
+            project-data
+                (let
+                    (
+                        (validated-project-id (get project-id-copy project-data))
+                    )
+                    (begin
+                        (asserts! (is-eq (get owner project-data) caller) ERR-UNAUTHORIZED-ACCESS)
+                        (asserts! (> (len title) u0) ERR-INVALID-INPUT)
+                        (asserts! (> (len description) u0) ERR-INVALID-INPUT)
+                        (asserts! (> deadline block-height) ERR-INVALID-INPUT)
+                        (asserts! (> reward u0) ERR-INVALID-INPUT)
+                        (asserts! (or
+                            (is-eq assignee (get owner project-data))
+                            (is-some (index-of (get members project-data) assignee))
+                        ) ERR-INVALID-INPUT)
+                        
+                        (match (get-next-task-id validated-project-id)
                             new-task-id
                                 (begin
                                     (map-set tasks
-                                        { project-id: project-id, task-id: new-task-id }
+                                        { project-id: validated-project-id, task-id: new-task-id }
                                         {
                                             assignee: assignee,
                                             title: title,
@@ -207,16 +219,16 @@
                                             deadline-height: deadline,
                                             reward-amount: reward,
                                             current-status: "pending",
-                                            created-at-height: block-height
+                                            created-at-height: block-height,
+                                            project-id-copy: validated-project-id,
+                                            task-id-copy: new-task-id
                                         }
                                     )
                                     (ok new-task-id)
                                 )
-                            error ERR-PROJECT-NOT-FOUND
+                            error-val ERR-PROJECT-NOT-FOUND
                         )
-                        ERR-INVALID-INPUT
                     )
-                    ERR-UNAUTHORIZED-ACCESS
                 )
             ERR-PROJECT-NOT-FOUND
         )
@@ -231,21 +243,27 @@
             (caller tx-sender)
         )
         (match (map-get? projects { project-id: project-id })
-            project-info
+            project-data
                 (match (map-get? tasks { project-id: project-id, task-id: task-id })
-                    task-info
-                        (if (or (is-eq (get owner project-info) caller) (is-eq (get assignee task-info) caller))
-                            (if (> (len new-status) u0)
-                                (begin
-                                    (map-set tasks
-                                        { project-id: project-id, task-id: task-id }
-                                        (merge task-info { current-status: new-status })
-                                    )
-                                    (ok true)
-                                )
-                                ERR-INVALID-INPUT
+                    task-data
+                        (let
+                            (
+                                (validated-project-id (get project-id-copy task-data))
+                                (validated-task-id (get task-id-copy task-data))
                             )
-                            ERR-UNAUTHORIZED-ACCESS
+                            (begin
+                                (asserts! (or 
+                                    (is-eq (get owner project-data) caller) 
+                                    (is-eq (get assignee task-data) caller)
+                                ) ERR-UNAUTHORIZED-ACCESS)
+                                (asserts! (> (len new-status) u0) ERR-INVALID-INPUT)
+                                
+                                (map-set tasks
+                                    { project-id: validated-project-id, task-id: validated-task-id }
+                                    (merge task-data { current-status: new-status })
+                                )
+                                (ok true)
+                            )
                         )
                     ERR-TASK-NOT-FOUND
                 )
@@ -263,36 +281,40 @@
             (caller tx-sender)
         )
         (match (map-get? projects { project-id: project-id })
-            project-info
+            project-data
                 (match (map-get? tasks { project-id: project-id, task-id: task-id })
-                    task-info
-                        (if (and
-                                (is-eq (get assignee task-info) caller)
-                                (is-eq (get current-status task-info) "pending")
+                    task-data
+                        (let
+                            (
+                                (validated-project-id (get project-id-copy task-data))
+                                (validated-task-id (get task-id-copy task-data))
                             )
                             (begin
-                                (try! (stx-transfer? (get reward-amount task-info) (get owner project-info) caller))
+                                (asserts! (is-eq (get assignee task-data) caller) ERR-UNAUTHORIZED-ACCESS)
+                                (asserts! (is-eq (get current-status task-data) "pending") ERR-UNAUTHORIZED-ACCESS)
+                                
+                                (try! (stx-transfer? (get reward-amount task-data) (get owner project-data) caller))
                                 (map-set tasks
-                                    { project-id: project-id, task-id: task-id }
-                                    (merge task-info { current-status: "completed" })
+                                    { project-id: validated-project-id, task-id: validated-task-id }
+                                    (merge task-data { current-status: "completed" })
                                 )
                                 (let ((current-stats (default-to
-                                        { tasks-completed: u0, total-earned: u0, average-rating: u0, total-ratings: u0 }
+                                        { tasks-completed: u0, total-earned: u0, average-rating: u0, total-ratings: u0, member-address-copy: caller }
                                         (map-get? member-stats { member-address: caller })
                                     )))
                                     (map-set member-stats
                                         { member-address: caller }
                                         {
                                             tasks-completed: (+ (get tasks-completed current-stats) u1),
-                                            total-earned: (+ (get total-earned current-stats) (get reward-amount task-info)),
+                                            total-earned: (+ (get total-earned current-stats) (get reward-amount task-data)),
                                             average-rating: (get average-rating current-stats),
-                                            total-ratings: (get total-ratings current-stats)
+                                            total-ratings: (get total-ratings current-stats),
+                                            member-address-copy: caller
                                         }
                                     )
                                 )
                                 (ok true)
                             )
-                            ERR-UNAUTHORIZED-ACCESS
                         )
                     ERR-TASK-NOT-FOUND
                 )
@@ -305,29 +327,33 @@
 ;; Rating must be between 1 and 5 inclusive
 ;; Updates the member's average rating using cumulative calculation
 (define-public (rate-member (member principal) (rating uint))
-    (if (and 
-            (>= rating u1) 
-            (<= rating u5)
-        )
+    (begin
+        (asserts! (>= rating u1) ERR-INVALID-INPUT)
+        (asserts! (<= rating u5) ERR-INVALID-INPUT)
+        
         (let
             (
                 (current-stats (default-to
-                    { tasks-completed: u0, total-earned: u0, average-rating: u0, total-ratings: u0 }
+                    { tasks-completed: u0, total-earned: u0, average-rating: u0, total-ratings: u0, member-address-copy: member }
                     (map-get? member-stats { member-address: member })
                 ))
+                (validated-member (get member-address-copy (default-to
+                    { tasks-completed: u0, total-earned: u0, average-rating: u0, total-ratings: u0, member-address-copy: member }
+                    (map-get? member-stats { member-address: member })
+                )))
             )
             (map-set member-stats
-                { member-address: member }
+                { member-address: validated-member }
                 {
                     tasks-completed: (get tasks-completed current-stats),
                     total-earned: (get total-earned current-stats),
                     average-rating: (/ (+ (* (get average-rating current-stats) (get total-ratings current-stats)) rating) (+ (get total-ratings current-stats) u1)),
-                    total-ratings: (+ (get total-ratings current-stats) u1)
+                    total-ratings: (+ (get total-ratings current-stats) u1),
+                    member-address-copy: validated-member
                 }
             )
             (ok true)
         )
-        ERR-INVALID-INPUT
     )
 )
 
@@ -349,4 +375,273 @@
 ;; Checks if a given address is authorized as a member of a project
 (define-read-only (check-member-authorization (project-id uint) (member-address principal))
     (is-authorized-member project-id member-address)
+)
+
+;; ============================================================================
+;; DISPUTE RESOLUTION & ESCROW SYSTEM
+;; ============================================================================
+
+;; Storage for task disputes
+(define-map task-disputes
+    { project-id: uint, task-id: uint }
+    {
+        raised-by: principal,
+        reason: (string-ascii 500),
+        status: (string-ascii 20),
+        raised-at-height: uint,
+        resolved-at-height: (optional uint),
+        resolution: (optional (string-ascii 500)),
+        project-id-copy: uint,
+        task-id-copy: uint
+    }
+)
+
+;; Escrow to hold task rewards until completion or dispute resolution
+(define-map task-escrow
+    { project-id: uint, task-id: uint }
+    {
+        amount: uint,
+        is-locked: bool,
+        deposited-by: principal,
+        project-id-copy: uint,
+        task-id-copy: uint
+    }
+)
+
+;; Dispute resolution votes (for community governance)
+(define-map dispute-votes
+    { project-id: uint, task-id: uint, voter: principal }
+    {
+        vote: (string-ascii 20),
+        voted-at-height: uint
+    }
+)
+
+;; Funds a task by depositing reward into escrow
+;; Only project owner can fund tasks
+;; Escrow ensures payment security for both parties
+(define-public (fund-task-escrow (project-id uint) (task-id uint))
+    (let
+        (
+            (caller tx-sender)
+        )
+        (match (map-get? projects { project-id: project-id })
+            project-data
+                (match (map-get? tasks { project-id: project-id, task-id: task-id })
+                    task-data
+                        (let
+                            (
+                                (validated-project-id (get project-id-copy task-data))
+                                (validated-task-id (get task-id-copy task-data))
+                            )
+                            (begin
+                                (asserts! (is-eq (get owner project-data) caller) ERR-UNAUTHORIZED-ACCESS)
+                                
+                                ;; Transfer funds from project owner to contract
+                                (try! (stx-transfer? (get reward-amount task-data) caller (as-contract tx-sender)))
+                                ;; Record in escrow
+                                (map-set task-escrow
+                                    { project-id: validated-project-id, task-id: validated-task-id }
+                                    {
+                                        amount: (get reward-amount task-data),
+                                        is-locked: true,
+                                        deposited-by: caller,
+                                        project-id-copy: validated-project-id,
+                                        task-id-copy: validated-task-id
+                                    }
+                                )
+                                (ok true)
+                            )
+                        )
+                    ERR-TASK-NOT-FOUND
+                )
+            ERR-PROJECT-NOT-FOUND
+        )
+    )
+)
+
+;; Raises a dispute for a task
+;; Can be raised by project owner or task assignee
+;; Locks the escrow until resolution
+(define-public (raise-dispute (project-id uint) (task-id uint) (reason (string-ascii 500)))
+    (let
+        (
+            (caller tx-sender)
+        )
+        (match (map-get? projects { project-id: project-id })
+            project-data
+                (match (map-get? tasks { project-id: project-id, task-id: task-id })
+                    task-data
+                        (let
+                            (
+                                (validated-project-id (get project-id-copy task-data))
+                                (validated-task-id (get task-id-copy task-data))
+                            )
+                            (begin
+                                (asserts! (> (len reason) u0) ERR-INVALID-INPUT)
+                                (asserts! (or 
+                                    (is-eq (get owner project-data) caller)
+                                    (is-eq (get assignee task-data) caller)
+                                ) ERR-UNAUTHORIZED-ACCESS)
+                                
+                                (map-set task-disputes
+                                    { project-id: validated-project-id, task-id: validated-task-id }
+                                    {
+                                        raised-by: caller,
+                                        reason: reason,
+                                        status: "open",
+                                        raised-at-height: block-height,
+                                        resolved-at-height: none,
+                                        resolution: none,
+                                        project-id-copy: validated-project-id,
+                                        task-id-copy: validated-task-id
+                                    }
+                                )
+                                ;; Lock the escrow
+                                (match (map-get? task-escrow { project-id: validated-project-id, task-id: validated-task-id })
+                                    escrow-info
+                                        (map-set task-escrow
+                                            { project-id: validated-project-id, task-id: validated-task-id }
+                                            (merge escrow-info { is-locked: true })
+                                        )
+                                    true
+                                )
+                                (ok true)
+                            )
+                        )
+                    ERR-TASK-NOT-FOUND
+                )
+            ERR-PROJECT-NOT-FOUND
+        )
+    )
+)
+
+;; Resolves a dispute
+;; Only project owner can resolve (future: can be extended to governance/arbitration)
+;; resolution-type: "refund" returns funds to owner, "release" pays assignee
+(define-public (resolve-dispute 
+    (project-id uint) 
+    (task-id uint) 
+    (resolution-type (string-ascii 20))
+    (resolution-note (string-ascii 500))
+)
+    (let
+        (
+            (caller tx-sender)
+        )
+        (match (map-get? projects { project-id: project-id })
+            project-data
+                (match (map-get? tasks { project-id: project-id, task-id: task-id })
+                    task-data
+                        (match (map-get? task-disputes { project-id: project-id, task-id: task-id })
+                            dispute-data
+                                (let
+                                    (
+                                        (validated-project-id (get project-id-copy dispute-data))
+                                        (validated-task-id (get task-id-copy dispute-data))
+                                    )
+                                    (begin
+                                        (asserts! (is-eq (get owner project-data) caller) ERR-UNAUTHORIZED-ACCESS)
+                                        
+                                        ;; Handle escrow based on resolution
+                                        (match (map-get? task-escrow { project-id: validated-project-id, task-id: validated-task-id })
+                                            escrow-info
+                                                (if (is-eq resolution-type "release")
+                                                    ;; Release funds to assignee
+                                                    (try! (as-contract (stx-transfer? (get amount escrow-info) tx-sender (get assignee task-data))))
+                                                    ;; Refund to project owner
+                                                    (try! (as-contract (stx-transfer? (get amount escrow-info) tx-sender (get owner project-data))))
+                                                )
+                                            true
+                                        )
+                                        ;; Update dispute status
+                                        (map-set task-disputes
+                                            { project-id: validated-project-id, task-id: validated-task-id }
+                                            (merge dispute-data {
+                                                status: "resolved",
+                                                resolved-at-height: (some block-height),
+                                                resolution: (some resolution-note)
+                                            })
+                                        )
+                                        ;; Clear escrow
+                                        (map-delete task-escrow { project-id: validated-project-id, task-id: validated-task-id })
+                                        (ok true)
+                                    )
+                                )
+                            ERR-INVALID-INPUT
+                        )
+                    ERR-TASK-NOT-FOUND
+                )
+            ERR-PROJECT-NOT-FOUND
+        )
+    )
+)
+
+;; Modified complete-task to work with escrow system
+;; Releases funds from escrow instead of direct transfer
+(define-public (complete-task-with-escrow (project-id uint) (task-id uint))
+    (let
+        (
+            (caller tx-sender)
+        )
+        (match (map-get? projects { project-id: project-id })
+            project-data
+                (match (map-get? tasks { project-id: project-id, task-id: task-id })
+                    task-data
+                        (let
+                            (
+                                (validated-project-id (get project-id-copy task-data))
+                                (validated-task-id (get task-id-copy task-data))
+                            )
+                            (begin
+                                (asserts! (is-none (map-get? task-disputes { project-id: validated-project-id, task-id: validated-task-id })) ERR-INVALID-INPUT)
+                                (asserts! (is-eq (get assignee task-data) caller) ERR-UNAUTHORIZED-ACCESS)
+                                (asserts! (is-eq (get current-status task-data) "pending") ERR-UNAUTHORIZED-ACCESS)
+                                
+                                ;; Release funds from escrow
+                                (match (map-get? task-escrow { project-id: validated-project-id, task-id: validated-task-id })
+                                    escrow-info
+                                        (try! (as-contract (stx-transfer? (get amount escrow-info) tx-sender caller)))
+                                    (try! (stx-transfer? (get reward-amount task-data) (get owner project-data) caller))
+                                )
+                                ;; Update task status
+                                (map-set tasks
+                                    { project-id: validated-project-id, task-id: validated-task-id }
+                                    (merge task-data { current-status: "completed" })
+                                )
+                                ;; Update member stats
+                                (let ((current-stats (default-to
+                                        { tasks-completed: u0, total-earned: u0, average-rating: u0, total-ratings: u0, member-address-copy: caller }
+                                        (map-get? member-stats { member-address: caller })
+                                    )))
+                                    (map-set member-stats
+                                        { member-address: caller }
+                                        {
+                                            tasks-completed: (+ (get tasks-completed current-stats) u1),
+                                            total-earned: (+ (get total-earned current-stats) (get reward-amount task-data)),
+                                            average-rating: (get average-rating current-stats),
+                                            total-ratings: (get total-ratings current-stats),
+                                            member-address-copy: caller
+                                        }
+                                    )
+                                )
+                                ;; Clear escrow
+                                (map-delete task-escrow { project-id: validated-project-id, task-id: validated-task-id })
+                                (ok true)
+                            )
+                        )
+                    ERR-TASK-NOT-FOUND
+                )
+            ERR-PROJECT-NOT-FOUND
+        )
+    )
+)
+
+;; Read-only functions for dispute system
+(define-read-only (get-dispute-info (project-id uint) (task-id uint))
+    (map-get? task-disputes { project-id: project-id, task-id: task-id })
+)
+
+(define-read-only (get-escrow-info (project-id uint) (task-id uint))
+    (map-get? task-escrow { project-id: project-id, task-id: task-id })
 )
